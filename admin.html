@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>账号管理 · 实验室安全刷题</title>
+<style>
+  :root{--ink:#1c2530;--muted:#6b7684;--line:#e2e7ee;--brand:#2f6fed;--bad:#c2382f;--ok:#12855b}
+  *{box-sizing:border-box}
+  body{margin:0;padding:20px;background:#eef1f6;color:var(--ink);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:14px}
+  .card{background:#fff;border-radius:14px;padding:16px;box-shadow:0 6px 24px rgba(20,32,54,.06);margin-bottom:14px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  input{font:inherit;padding:9px 11px;border:1.5px solid var(--line);border-radius:9px;background:#fbfcfe;outline:none}
+  input:focus{border-color:#a9c4ff;background:#fff}
+  button{font:inherit;font-weight:600;border:0;border-radius:9px;padding:8px 14px;cursor:pointer;
+    background:var(--brand);color:#fff}
+  button.ghost{background:#eef2f8;color:#33415a}
+  button.danger{background:#fdecea;color:#93271f}
+  button.small{padding:5px 10px;font-size:12.5px;border-radius:7px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:9px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{color:var(--muted);font-weight:600;background:#f7f9fc;position:sticky;top:0}
+  .pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;border:1px solid var(--line)}
+  .pill.banned{background:#fdecea;color:#93271f;border-color:#f0b4ae}
+  .pill.ok{background:#e6f6ef;color:#0d5c40;border-color:#9ed9c1}
+  .pill.warn{background:#fff4e5;color:#8a5a12;border-color:#f0d3a6}
+  .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px}
+  .muted{color:var(--muted);font-size:12.5px}
+  .msg{margin-top:8px;font-size:13px;min-height:20px}
+  .msg.bad{color:var(--bad)} .msg.ok{color:var(--ok)}
+  .scroll{max-height:62vh;overflow:auto;border:1px solid var(--line);border-radius:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>账号管理</h1>
+  <div class="sub">一个设备一个账号；不同设备使用同一账号会被记为违规。封禁后该账号在客户端立即失效。</div>
+
+  <div class="card">
+    <div class="row">
+      <input id="api" style="flex:1;min-width:240px" placeholder="API 地址">
+      <input id="key" type="password" placeholder="管理员密钥" style="flex:1;min-width:200px">
+      <button id="save">连接</button>
+      <button class="ghost" id="reload">刷新</button>
+      <button class="ghost" id="sync">同步到 GitHub</button>
+      <span class="muted" id="count"></span>
+    </div>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <div class="card">
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>账号</th><th>昵称</th><th>状态</th><th>设备</th><th>违规</th>
+          <th>创建</th><th>最后访问</th><th>操作</th>
+        </tr></thead>
+        <tbody id="rows"><tr><td colspan="8" class="muted">输入管理员密钥后点“连接”</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+$("api").value = localStorage.getItem("lq.api") || location.origin;
+$("key").value = sessionStorage.getItem("lq.key") || "";
+
+function fmt(ts) {
+  if (!ts) return "-";
+  const d = new Date(Number(ts));
+  const p = (n) => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " +
+    p(d.getHours()) + ":" + p(d.getMinutes());
+}
+function msg(text, cls) {
+  $("msg").textContent = text;
+  $("msg").className = "msg " + (cls || "");
+}
+async function api(path, opts) {
+  const base = $("api").value.replace(/\/+$/, "");
+  const headers = Object.assign(
+    {"Content-Type": "application/json", "X-Admin-Key": $("key").value},
+    (opts && opts.headers) || {}
+  );
+  const r = await fetch(base + path, Object.assign({}, opts, {headers}));
+  let j = {};
+  try { j = await r.json(); } catch (e) { j = {}; }
+  if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
+async function load() {
+  try {
+    const j = await api("/api/admin/accounts");
+    const rows = j.accounts || [];
+    $("count").textContent = "共 " + rows.length + " 个账号";
+    const body = $("rows");
+    body.textContent = "";
+    if (!rows.length) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 8;
+      td.className = "muted";
+      td.textContent = "还没有账号";
+      tr.appendChild(td);
+      body.appendChild(tr);
+    }
+    rows.forEach((a) => {
+      const tr = document.createElement("tr");
+      const banned = a.status === "banned";
+      const devs = Number(a.device_count || 0);
+      const viol = Number(a.violation_count || 0);
+      const addCell = (content, cls) => {
+        const td = document.createElement("td");
+        if (cls) td.className = cls;
+        if (typeof content === "string") td.textContent = content;
+        else td.appendChild(content);
+        tr.appendChild(td);
+        return td;
+      };
+      addCell(a.id, "mono");
+      addCell(a.nickname || "");
+      const pill = document.createElement("span");
+      pill.className = "pill " + (banned ? "banned" : (viol ? "warn" : "ok"));
+      pill.textContent = banned ? "已封禁" : (viol ? "有违规" : "正常");
+      addCell(pill);
+      addCell(String(devs));
+      const vwrap = document.createElement("div");
+      vwrap.textContent = String(viol);
+      if (a.last_violation) {
+        const d = document.createElement("div");
+        d.className = "muted";
+        d.textContent = "最近 " + fmt(a.last_violation);
+        vwrap.appendChild(d);
+      }
+      addCell(vwrap);
+      addCell(fmt(a.created_at));
+      addCell(fmt(a.last_seen));
+      const actCell = addCell("");
+      const mk = (label, cls, fn) => {
+        const b = document.createElement("button");
+        b.className = "small " + cls;
+        b.textContent = label;
+        b.addEventListener("click", fn);
+        actCell.appendChild(b);
+        const sp = document.createElement("span");
+        sp.textContent = " ";
+        actCell.appendChild(sp);
+      };
+      if (banned) {
+        mk("解封", "ghost", () => act("/api/admin/unban", a.id, "已解封"));
+      } else {
+        mk("封禁", "danger", () => {
+          const reason = prompt("封禁原因（会显示给使用者）", "多端登录");
+          if (reason === null) return;
+          act("/api/admin/ban", a.id, "已封禁", {reason: reason});
+        });
+      }
+      mk("重绑设备", "ghost", () => act("/api/admin/rebind", a.id, "已重新绑定最近一次尝试的设备"));
+      mk("删除", "danger", () => {
+        if (!confirm("删除账号 " + a.id + "？该操作不可恢复。")) return;
+        act("/api/admin/delete", a.id, "已删除");
+      });
+      body.appendChild(tr);
+    });
+    msg("已加载 " + rows.length + " 个账号", "ok");
+  } catch (e) {
+    msg("加载失败：" + e.message, "bad");
+  }
+}
+async function act(path, id, okText, extra) {
+  try {
+    await api(path, {
+      method: "POST",
+      body: JSON.stringify(Object.assign({id: id}, extra || {}))
+    });
+    msg(okText + "（" + id + "）", "ok");
+    await load();
+  } catch (e) {
+    msg("操作失败：" + e.message, "bad");
+  }
+}
+$("save").addEventListener("click", () => {
+  localStorage.setItem("lq.api", $("api").value);
+  sessionStorage.setItem("lq.key", $("key").value);
+  load();
+});
+$("reload").addEventListener("click", load);
+$("sync").addEventListener("click", async () => {
+  try {
+    await api("/api/admin/sync", {method: "POST"});
+    msg("已同步到 GitHub 仓库", "ok");
+  } catch (e) {
+    msg("同步失败：" + e.message, "bad");
+  }
+});
+if ($("key").value) load();
+</script>
+</body>
+</html>
