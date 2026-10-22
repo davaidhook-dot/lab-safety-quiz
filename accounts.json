@@ -1,15 +1,4 @@
 {
- "syncedAt": "2026-10-22T01:46:48.966Z",
- "accounts": [
-  {
-   "id": "LQ-V2DPRL",
-   "nickname": "快照验证",
-   "status": "active",
-   "created_at": 1792633607477,
-   "last_seen": 1792633607477,
-   "ban_reason": null,
-   "device_count": 1,
-   "violation_count": 0
-  }
- ]
+ "syncedAt": "2026-10-22T01:46:57.964Z",
+ "accounts": []
 }
