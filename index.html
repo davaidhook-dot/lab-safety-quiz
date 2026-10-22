@@ -232,6 +232,8 @@
   .acctbar{text-align:center; color:#8b95a4; font-size:12px; padding:0 0 6px}
   .acctbar b{color:#2f6fed; font-family:ui-monospace,Menlo,Consolas,monospace}
   body.acct-locked .acctbar{display:none}
+  .linkbtn{background:none;border:0;color:#6b7684;text-decoration:underline;font:inherit;
+    font-size:12.5px;cursor:pointer;padding:4px 6px;margin-top:2px}
 
 </style>
 </head>
@@ -415,6 +417,7 @@
       <button type="button" class="loginbtn" id="acctRetry">重新验证</button>
     </div>
     <div class="loginerr" id="acctErr"></div>
+    <button type="button" class="linkbtn" id="acctDiag" hidden>网络自检</button>
     <div class="loginhint" id="acctHint">账号仅用于识别设备与记录违规，不收集个人信息。</div>
   </div>
 </div>
@@ -427,8 +430,8 @@
 <script>
 
 (function () {
-  var PASSWORD_HASH = "e39408af7c6a2d3e65304ed1ec96d468cc0422e2892f2f9de7ef6078b3a4bc35";
-  var SALT = "4b61630d8d1931d5";
+  var PASSWORD_HASH = "bda2d5dcbfa36859cdb4ba5131936d6e88c3f6b01ecaf30d484ceb85dce5769e";
+  var SALT = "12259d033b5a8128";
   var ITER = 10000;
   var DAYS = 30;
   var KEY = "labquiz.access";
@@ -720,6 +723,7 @@
   function showError(msg) {
     gate.hidden = false;
     document.body.classList.add("acct-locked");
+    document.getElementById("acctDiag").hidden = false;
     var acc = loadAccount();
     if (acc) {
       document.getElementById("acctTitle").textContent = "账号验证失败";
@@ -755,12 +759,23 @@
   }
 
   var doFetch = (window.fetch || fetch);
+  function fetchT(url, opts, ms) {
+    var ctrl = null;
+    try { ctrl = new AbortController(); } catch (e) { ctrl = null; }
+    var o = Object.assign({}, opts || {});
+    if (ctrl) o.signal = ctrl.signal;
+    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, ms || 15000) : null;
+    return doFetch(url, o).then(
+      function (r) { if (timer) clearTimeout(timer); return r; },
+      function (e) { if (timer) clearTimeout(timer); throw e; }
+    );
+  }
   function post(path, body) {
-    return doFetch(API + path, {
+    return fetchT(API + path, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(body)
-    }).then(function (r) {
+    }, 15000).then(function (r) {
       return r.json().then(function (j) { return {status: r.status, body: j}; });
     });
   }
@@ -782,7 +797,7 @@
         showError("账号验证失败，请稍后重试");
       })
       .catch(function () {
-        showError("无法连接服务器，请检查网络后点“重新验证”");
+        showError("无法连接账号服务器（" + API + "）。请点下方“网络自检”查看详情。");
       });
   }
 
@@ -802,7 +817,8 @@
         setErr(j.error === "nickname_required" ? "昵称不能为空" : "创建失败，请稍后重试");
       })
       .catch(function () {
-        setErr("无法连接服务器，请检查网络后重试");
+        setErr("无法连接账号服务器（" + API + "）。请点下方“网络自检”。");
+        document.getElementById("acctDiag").hidden = false;
       })
       .then(function () {
         document.getElementById("acctGo").disabled = false;
@@ -822,6 +838,18 @@
 
   document.getElementById("acctGo").addEventListener("click", create);
   document.getElementById("acctRetry").addEventListener("click", verify);
+  document.getElementById("acctDiag").addEventListener("click", function () {
+    setErr("正在检测 " + API + " …", true);
+    fetchT(API + "/health", {cache: "no-store"}, 10000)
+      .then(function (r) {
+        return r.text().then(function (t) {
+          setErr("自检结果：HTTP " + r.status + " " + String(t).slice(0, 80), r.ok);
+        });
+      })
+      .catch(function (e) {
+        setErr("自检失败：" + ((e && e.message) || "网络错误") + "（" + API + "）");
+      });
+  });
   document.getElementById("acctNick").addEventListener("keydown", function (e) {
     if (String(e.key) === "Enter") {
       e.preventDefault();
