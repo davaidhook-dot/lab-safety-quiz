@@ -221,9 +221,21 @@
   body.locked #app{display:none}
   body.locked .logoutwrap{display:none}
 
+  body.acct-locked #app{display:none}
+  body.acct-locked .logoutwrap{display:none}
+  .account{position:fixed; inset:0; z-index:56; display:flex; align-items:center; justify-content:center;
+    padding:24px; background:linear-gradient(165deg,#eef3fb 0%,#dde7f7 55%,#e9eef8 100%)}
+  .account[hidden]{display:none}
+  .acctid{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:22px; font-weight:700;
+    letter-spacing:1px; color:#2f6fed; background:#eef4ff; border:1px solid #c9d9f7;
+    border-radius:10px; padding:8px; margin:6px 0 12px}
+  .acctbar{text-align:center; color:#8b95a4; font-size:12px; padding:0 0 6px}
+  .acctbar b{color:#2f6fed; font-family:ui-monospace,Menlo,Consolas,monospace}
+  body.acct-locked .acctbar{display:none}
+
 </style>
 </head>
-<body class="locked">
+<body class="locked acct-locked">
 
 <div class="login" id="login">
   <div class="loginbox">
@@ -389,6 +401,25 @@
 </div>
 
 
+<div class="account" id="accountGate" hidden>
+  <div class="loginbox">
+    <div class="loginlogo">👤</div>
+    <h1 id="acctTitle">创建账号</h1>
+    <div class="loginsub" id="acctSub">每台设备一个账号，创建后不可更改</div>
+    <div id="acctCreate">
+      <input type="text" id="acctNick" maxlength="20" placeholder="昵称（1–20 字）" aria-label="昵称">
+      <button type="button" class="loginbtn" id="acctGo">创建账号</button>
+    </div>
+    <div id="acctInfo" hidden>
+      <div class="acctid" id="acctId"></div>
+      <button type="button" class="loginbtn" id="acctRetry">重新验证</button>
+    </div>
+    <div class="loginerr" id="acctErr"></div>
+    <div class="loginhint" id="acctHint">账号仅用于识别设备与记录违规，不收集个人信息。</div>
+  </div>
+</div>
+<div class="acctbar" id="acctBar"></div>
+
 <div class="logoutwrap"><button type="button" class="logoutbtn" id="logout">退出访问</button></div>
 
 <div class="toast" id="toast"></div>
@@ -396,8 +427,8 @@
 <script>
 
 (function () {
-  var PASSWORD_HASH = "3b1ad6d7cdf9adc0c48d8e50d2a516a665bc7bcbe87676d4b684c52c73b532e7";
-  var SALT = "74bf91029c4a820e";
+  var PASSWORD_HASH = "e39408af7c6a2d3e65304ed1ec96d468cc0422e2892f2f9de7ef6078b3a4bc35";
+  var SALT = "4b61630d8d1931d5";
   var ITER = 10000;
   var DAYS = 30;
   var KEY = "labquiz.access";
@@ -520,6 +551,11 @@
     document.body.classList.remove("locked");
     var box = document.getElementById("login");
     if (box) box.style.display = "none";
+    try {
+      window.dispatchEvent(new CustomEvent("labquiz-unlocked"));
+    } catch (e) {
+      /* ignore */
+    }
   }
 
   function lock() {
@@ -581,6 +617,226 @@
     lock: lock,
     isUnlocked: isUnlocked,
     configuredHash: PASSWORD_HASH
+  };
+})();
+
+</script>
+<script>
+
+(function () {
+  var API = "https://lab-quiz-api.davaidhook.workers.dev";
+  if (!API || API.indexOf("__") === 0) {
+    document.body.classList.remove("acct-locked");
+    return;
+  }
+  API = API.replace(/\/+$/, "");
+  var K_DEV = "labquiz.device";
+  var K_ACCT = "labquiz.account";
+  var gate = document.getElementById("accountGate");
+  var started = false;
+  var canStore = true;
+  try {
+    localStorage.setItem("__lq_probe", "1");
+    localStorage.removeItem("__lq_probe");
+  } catch (e) {
+    canStore = false;
+  }
+
+  function store(k, v) {
+    try { localStorage.setItem(k, v); } catch (e) { /* ignore */ }
+  }
+  function read(k) {
+    try { return localStorage.getItem(k); } catch (e) { return null; }
+  }
+  function drop(k) {
+    try { localStorage.removeItem(k); } catch (e) { /* ignore */ }
+  }
+
+  var deviceId = read(K_DEV);
+  if (!deviceId || !/^[A-Za-z0-9_-]{8,80}$/.test(deviceId)) {
+    deviceId = "d" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    store(K_DEV, deviceId);
+  }
+
+  function fingerprint() {
+    var navi = (typeof navigator !== "undefined") ? navigator : {};
+    var scr = (typeof screen !== "undefined") ? screen : {width: 0, height: 0, colorDepth: 0};
+    var raw = [
+      navi.userAgent || "",
+      navi.language || "",
+      scr.width + "x" + scr.height + "x" + scr.colorDepth,
+      new Date().getTimezoneOffset(),
+      navi.hardwareConcurrency || 0
+    ].join("|");
+    var h = 2166136261;
+    for (var i = 0; i < raw.length; i++) {
+      h ^= raw.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return "fp" + h.toString(16);
+  }
+
+  function loadAccount() {
+    try { return JSON.parse(read(K_ACCT) || "null"); } catch (e) { return null; }
+  }
+  function saveAccount(a) {
+    store(K_ACCT, JSON.stringify({id: a.id, nickname: a.nickname || ""}));
+  }
+  function clearAccount() { drop(K_ACCT); }
+
+  var elErr = document.getElementById("acctErr");
+  function setErr(msg, ok) {
+    elErr.textContent = msg || "";
+    elErr.style.color = ok ? "#12855b" : "";
+  }
+
+  function showCreate(msg) {
+    gate.hidden = false;
+    document.body.classList.add("acct-locked");
+    document.getElementById("acctTitle").textContent = "创建账号";
+    document.getElementById("acctSub").textContent = "每台设备一个账号，创建后不可更改";
+    document.getElementById("acctCreate").hidden = false;
+    document.getElementById("acctInfo").hidden = true;
+    document.getElementById("acctHint").textContent = "账号仅用于识别设备与记录违规，不收集个人信息。";
+    setErr(msg || "");
+  }
+
+  function showBlocked(msg) {
+    gate.hidden = false;
+    document.body.classList.add("acct-locked");
+    document.getElementById("acctTitle").textContent = "无法进入";
+    document.getElementById("acctSub").textContent = "当前账号不可用";
+    document.getElementById("acctCreate").hidden = true;
+    var info = document.getElementById("acctInfo");
+    var acc = loadAccount();
+    info.hidden = false;
+    document.getElementById("acctId").textContent = acc ? acc.id : "";
+    document.getElementById("acctRetry").hidden = !acc;
+    setErr(msg);
+    document.getElementById("acctHint").textContent =
+      "如设备更换需要恢复，请联系管理员处理。";
+  }
+
+  function showError(msg) {
+    gate.hidden = false;
+    document.body.classList.add("acct-locked");
+    var acc = loadAccount();
+    if (acc) {
+      document.getElementById("acctTitle").textContent = "账号验证失败";
+      document.getElementById("acctCreate").hidden = true;
+      document.getElementById("acctInfo").hidden = false;
+      document.getElementById("acctId").textContent = acc.id;
+      document.getElementById("acctRetry").hidden = false;
+    } else {
+      showCreate();
+    }
+    setErr(msg || "网络异常，请稍后重试");
+  }
+
+  function unlock(acc) {
+    saveAccount(acc);
+    gate.hidden = true;
+    document.body.classList.remove("acct-locked");
+    var bar = document.getElementById("acctBar");
+    if (bar) {
+      bar.innerHTML = "";
+      var pre = document.createElement("span");
+      pre.textContent = "账号 ";
+      bar.appendChild(pre);
+      var b = document.createElement("b");
+      b.textContent = acc.id;
+      bar.appendChild(b);
+      if (acc.nickname) {
+        var nick = document.createElement("span");
+        nick.textContent = " · " + acc.nickname;
+        bar.appendChild(nick);
+      }
+    }
+  }
+
+  var doFetch = (window.fetch || fetch);
+  function post(path, body) {
+    return doFetch(API + path, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.json().then(function (j) { return {status: r.status, body: j}; });
+    });
+  }
+
+  function verify() {
+    var acc = loadAccount();
+    if (!acc) { showCreate(); return; }
+    setErr("正在验证账号…", true);
+    post("/api/login", {accountId: acc.id, deviceId: deviceId, fp: fingerprint()})
+      .then(function (res) {
+        var j = res.body || {};
+        if (j.ok) return unlock(j.account || acc);
+        if (j.error === "banned") return showBlocked("账号已被停用：" + (j.reason || "违规"));
+        if (j.error === "multi_device") return showBlocked(j.message || "检测到该账号在其他设备登录");
+        if (j.error === "account_not_found") {
+          clearAccount();
+          return showCreate("原账号已失效，请重新创建");
+        }
+        showError("账号验证失败，请稍后重试");
+      })
+      .catch(function () {
+        showError("无法连接服务器，请检查网络后点“重新验证”");
+      });
+  }
+
+  function create() {
+    var nick = String(document.getElementById("acctNick").value || "").trim();
+    if (!nick) { setErr("请填写昵称"); return; }
+    setErr("正在创建…", true);
+    document.getElementById("acctGo").disabled = true;
+    post("/api/register", {nickname: nick, deviceId: deviceId, fp: fingerprint()})
+      .then(function (res) {
+        var j = res.body || {};
+        if (j.ok) return unlock(j.account);
+        if (j.error === "device_already_registered" && j.account) {
+          saveAccount(j.account);
+          return verify();
+        }
+        setErr(j.error === "nickname_required" ? "昵称不能为空" : "创建失败，请稍后重试");
+      })
+      .catch(function () {
+        setErr("无法连接服务器，请检查网络后重试");
+      })
+      .then(function () {
+        document.getElementById("acctGo").disabled = false;
+      });
+  }
+
+  function start() {
+    if (started) return;
+    started = true;
+    gate.hidden = false;
+    if (!canStore) {
+      showBlocked("浏览器禁止了本地存储，无法创建或验证账号。请关闭无痕模式或允许本站保存数据后重试。");
+      return;
+    }
+    verify();
+  }
+
+  document.getElementById("acctGo").addEventListener("click", create);
+  document.getElementById("acctRetry").addEventListener("click", verify);
+  document.getElementById("acctNick").addEventListener("keydown", function (e) {
+    if (String(e.key) === "Enter") {
+      e.preventDefault();
+      create();
+    }
+  });
+
+  if (window.__gate && window.__gate.isUnlocked && window.__gate.isUnlocked()) start();
+  window.addEventListener("labquiz-unlocked", start);
+  window.__account = {
+    verify: verify,
+    create: create,
+    state: function () { return loadAccount(); },
+    deviceId: function () { return deviceId; },
+    api: API
   };
 })();
 
